@@ -1,0 +1,43 @@
+# ===== Terraform =====
+**/.terraform/*
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+crash.log
+crash.*.log
+# 変数ファイルは個人IP等を含みうるため除外（main.tf内のdefaultで運用）
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+tfplan
+*.tfplan
+
+# ===== 認証情報・秘密情報（絶対にコミットしない） =====
+*.pem
+*.key
+*.ppk
+id_rsa*
+id_ed25519*
+.env
+.env.*
+credentials
+aws-credentials*
+.aws/
+*secret*
+*Secret*
+*.p12
+*.pfx
+
+# ===== OS/エディタ =====
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
