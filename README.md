@@ -54,6 +54,8 @@ docs/
   phase1-setup-procedure.md Phase1構築手順（Fargate版の詳細解説）
   terraform-quickstart.md  Terraform未経験者向けクイックスタート
   phase3-log-analysis.md   ログ分析リファレンス（どの攻撃がどのログに出るか）
+  zenn-capture-checklist.md Zenn記事用の撮影・ログ取得チェックリスト（マスキング注意つき）
+  zenn-article-outline.md  Zenn記事の構成案
 ```
 
 ---

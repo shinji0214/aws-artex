@@ -41,3 +41,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Zenn記事用の撮影素材（マスキング前の画像・ログを含むため非コミット）
+captures/
