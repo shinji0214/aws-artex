@@ -60,7 +60,7 @@
 
 ## 3. Option A: IAMを限定許可する自作ポリシー
 
-PowerUserAccess に加えて、**プロジェクト用ロール(`artex-lab-*`)の作成・PassRole だけ**を許可する。
+PowerUserAccess に加えて、**プロジェクト用ロール/インスタンスプロファイル(`artex-lab-*`)の作成・PassRole だけ**を許可する。
 
 ### 作成手順（コンソール）
 1. IAM → **ポリシー** → **ポリシーの作成** → **JSON** タブ。
@@ -84,13 +84,23 @@ PowerUserAccess に加えて、**プロジェクト用ロール(`artex-lab-*`)�
       "Resource": "arn:aws:iam::<<ACCOUNT_ID>>:role/artex-lab-*"
     },
     {
+      "Sid": "ManageProjectInstanceProfiles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile", "iam:GetInstanceProfile",
+        "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile",
+        "iam:TagInstanceProfile", "iam:UntagInstanceProfile"
+      ],
+      "Resource": "arn:aws:iam::<<ACCOUNT_ID>>:instance-profile/artex-lab-*"
+    },
+    {
       "Sid": "PassProjectRolesToServices",
       "Effect": "Allow",
       "Action": "iam:PassRole",
       "Resource": "arn:aws:iam::<<ACCOUNT_ID>>:role/artex-lab-*",
       "Condition": {
         "StringEquals": { "iam:PassedToService":
-          ["ecs-tasks.amazonaws.com", "vpc-flow-logs.amazonaws.com"] }
+          ["ec2.amazonaws.com", "ecs-tasks.amazonaws.com", "vpc-flow-logs.amazonaws.com"] }
       }
     },
     {
@@ -103,8 +113,11 @@ PowerUserAccess に加えて、**プロジェクト用ロール(`artex-lab-*`)�
 }
 ```
 
-> ポイント: ロール作成・削除・PassRole を **`role/artex-lab-*` に限定**。
-> これで「このプロジェクトのロールだけ扱える」状態になり、他の IAM 変更はできない。
+> ポイント: ロール/インスタンスプロファイル作成・PassRole を **`artex-lab-*` に限定**。
+> これで「このプロジェクトのものだけ扱える」状態になり、他の IAM 変更はできない。
+> ※ EC2版ではロールを EC2 に付けるため **インスタンスプロファイル**（別リソース）と、
+>   **ec2.amazonaws.com への PassRole** が必要。上記ポリシーに両方含めてある
+>   （Fargate版だけなら instance-profile と ec2 の PassRole は不要）。
 
 ---
 
@@ -152,12 +165,20 @@ PowerUser を使わず、Phase1 で触るサービスだけ許可。IAM 部分�
       "Resource": "arn:aws:iam::<<ACCOUNT_ID>>:role/artex-lab-*"
     },
     {
+      "Sid": "ManageProjectInstanceProfiles",
+      "Effect": "Allow",
+      "Action": ["iam:CreateInstanceProfile","iam:DeleteInstanceProfile","iam:GetInstanceProfile",
+        "iam:AddRoleToInstanceProfile","iam:RemoveRoleFromInstanceProfile",
+        "iam:TagInstanceProfile","iam:UntagInstanceProfile"],
+      "Resource": "arn:aws:iam::<<ACCOUNT_ID>>:instance-profile/artex-lab-*"
+    },
+    {
       "Sid": "PassProjectRoles",
       "Effect": "Allow",
       "Action": "iam:PassRole",
       "Resource": "arn:aws:iam::<<ACCOUNT_ID>>:role/artex-lab-*",
       "Condition": { "StringEquals": { "iam:PassedToService":
-        ["ecs-tasks.amazonaws.com","vpc-flow-logs.amazonaws.com"] } }
+        ["ec2.amazonaws.com","ecs-tasks.amazonaws.com","vpc-flow-logs.amazonaws.com"] } }
     },
     {
       "Sid": "ReadOnlyHelpers",
