@@ -1,178 +1,176 @@
-# Zenn記事用 撮影・ログ取得チェックリスト
+# Zenn記事用 撮影・ログ取得チェックリスト（ローカル検証版）
 
-> 検証中に「後から取り直すのが面倒なもの」を取り逃さないためのリスト。フェーズ別に、撮るもの・記事での使い道・撮り逃したときの再現方法をまとめる。
-> 記事構成案は [`zenn-article-outline.md`](zenn-article-outline.md)。最終更新: 2026-10-27
+> 記事の筋書き: AWSに検証環境を構築 → ARTEXの利用規約上、ネットワーク越しの対象（自己所有でも）は使えないと判明して方針転換 → **ローカルにAWS風ログ環境を作り直し、攻撃がログにどう見えるかを学ぶ**。
+> 記事構成案は [`zenn-article-outline.md`](zenn-article-outline.md)。最終更新: 2026-10-27（方針変更を反映）
+>
+> ⚠ ローカル構成（ポート・コンテナ名・Flow Logs風ログの形式）は動作確認後に確定する。`<<確定待ち>>` の箇所は確定後に更新すること。
 
 ---
 
-## 0. 撮影の共通ルール
+## 0. 共通ルール
 
-### ファイル名と保存先
-- 保存先: `D:\study\aws-artex\captures\pX\`（**リポジトリにはコミットしない**。`.gitignore` に `captures/` を追加済み）
-- 命名: `pX-連番-内容.png`（例: `p2-03-planner-first-plan.png`）。ログは `.txt` / `.json` で同じ連番に。
-- 撮ったら `captures/README.txt` に「時刻(JST)・何をした直後か」を1行メモ。**Phase3でログと時刻を突き合わせるのに必須。**
+### 保存先と命名
+- 保存先: `D:\study\aws-artex\captures\pX\`（**コミットしない**。`captures/` は `.gitignore` 済み）
+- 命名: `pX-連番-内容.png`（例: `p3-02-planner-first-plan.png`）。ログは `.log` / `.txt` で同じ連番に。
+- `captures/README.txt` に「時刻・何をした直後か」を1行ずつメモ。
 
-### 時刻をそろえる（最重要）
-- ARTEX実行の **開始時刻・終了時刻を秒まで** 控える（PowerShell: `Get-Date -Format o`）。
-- AWSコンソールのタイムゾーン表示を **JST か UTC のどちらかに統一**（記事内でも明記）。CloudWatch Logs Insights は右上で切替可能。
+### 時刻をそろえる
+- ARTEX実行の **開始・終了時刻を秒まで** 控える（PowerShell: `Get-Date -Format o`）。
+- nginx（ALB風ログ）・Juice Shop・Flow Logs風ログ・ARTEX の **タイムゾーンをそろえる**（コンテナは既定UTC。記事内で「UTC表記」と明記するのが楽）。
 
 ### マスキング（公開前に必ず）
 
+ローカル実行になったので、出てくる機密情報はかなり減る。ただし前半のAWSパートの画像には引き続き注意。
+
 | 情報 | 出る場所 | 対応 |
 |---|---|---|
-| **AWSアカウントID**（12桁） | コンソール右上、ARN、CloudTrail、**S3バケット名 `artex-lab-cloudtrail-<ID>`**、`terraform output account_id`、`aws sts get-caller-identity` | `123456789012` に置換 or 塗りつぶし |
-| **自宅/作業元のグローバルIP** | SG ルール、Flow Logs の `srcaddr`、`terraform.tfvars`、`checkip` の出力、アプリログ | `203.0.113.10`（ドキュメント用IP, RFC5737）に置換 |
-| **EC2のパブリックIP / app_url** | `terraform output`、ブラウザのURLバー、ARTEXのターゲット登録画面 | `198.51.100.20` 等に置換。destroy後でも再利用され得るので必ず隠す |
-| **Anthropic APIキー** | `.env`、ARTEXのLLM設定画面、console.anthropic.com | **画面に表示させない**。写り込んだら撮り直し（塗りつぶしより安全）。万一公開したら即ローテーション |
-| ARTEXの管理パスワード / セットアップトークン | `docker compose logs artex` の `[auth]` 行、`/setup` | 写さない |
+| **Anthropic APIキー** | `.env`、ARTEXのLLM設定画面、console.anthropic.com | **画面に表示させない**。写ったら撮り直す。万一公開したら即ローテーション |
+| ARTEX管理パスワード / セットアップトークン | `docker compose logs artex` の `[auth]` 行、`/setup` | 写さない。ログ保存時はその行を削除 |
 | `POSTGRES_PASSWORD` | `.env` | 写さない |
-| IAMアクセスキーID（`AKIA...`） | `aws configure`、`~/.aws/credentials`、CloudTrail の `accessKeyId` | 塗りつぶし |
-| インスタンスID / ENI ID / VPC ID | コンソール、Flow Logs のストリーム名 | 必須ではないが気になるなら一部伏せ字 |
-| PC名・ユーザー名 | PowerShellのプロンプト、パス `C:\Users\<名前>` | プロンプトを短くしてから撮る（`function prompt { "PS> " }`） |
+| PC名・Windowsユーザー名 | PowerShellのプロンプト、`C:\Users\<名前>`、Docker Desktop画面 | プロンプトを短くして撮る（`function prompt { "PS> " }`） |
+| 自宅LANのIP（`192.168.x.x` 等） | `ipconfig`、ログの送信元が host 経由になった場合 | 気になるなら伏せる（プライベートIPなので必須ではない） |
+| **（AWSパート）アカウントID** | コンソール右上、ARN、CloudTrailバケット名 `artex-lab-cloudtrail-<ID>`、`terraform output` | `123456789012` に置換 / 塗りつぶし |
+| **（AWSパート）自宅グローバルIP・EC2のIP** | SG、`terraform.tfvars`、`app_url`、ブラウザのURLバー | `203.0.113.10` / `198.51.100.20`（ドキュメント用IP）に置換 |
+| （AWSパート）アクセスキーID `AKIA...` | `aws configure`、CloudTrail | 塗りつぶし |
 
-> テキストで貼るログは、公開前に `captures/` 全体を「アカウントID・自IP・EC2 IP・`AKIA`・`sk-ant`」で grep して残りが無いか確認する。
-> 画像は塗りつぶしではなく **単色の矩形で完全に覆う**（モザイク・ぼかしは復元される場合がある）。
-
----
-
-## P0: IAM（構築用ユーザーの切り出し）
-
-| # | 撮るもの | 記事での使い道 | 状態 |
-|---|---|---|---|
-| P0-1 | IAMユーザー `artex-lab-builder` の「許可」タブ（PowerUserAccess＋iam-limited が付いている状態） | admin常用を避けた構成の説明 | ☐ |
-| P0-2 | `iam-limited` ポリシーのJSON（`artex-lab-*` 限定・PassRole対象サービス） | 「最小権限で作る」節のコード | ☐ |
-| P0-3 | `aws sts get-caller-identity --profile artex-lab` の出力 | builderで動いている証拠（**Account/Arnをマスク**） | ☐ |
-| P0-4 | apply が権限不足で止まったエラー（instance-profile 作成 / PassRole） | ハマりどころとして記事映えする | ☐ |
-
-**撮り逃した場合の再現:**
-- P0-1〜3 はいつでも撮れる（コンソール / CLI を開くだけ）。
-- P0-4 はエラー文面の再現が手間なので、**エラーメッセージのテキストを `docs/phase0-iam-setup.md` の記述から再構成**し、「当時のエラー（要約）」として載せれば十分。どうしても画面が欲しければ、テスト用にポリシーから `iam:CreateInstanceProfile` を一時的に外して `terraform apply` → 撮影 → 戻す（**戻し忘れ注意**）。
+> 公開前に `captures/` を「`sk-ant`・`AKIA`・アカウントID・自宅グローバルIP」で grep し、ヒット0を確認。
+> 画像は単色の矩形で完全に覆う（モザイク・ぼかしは復元される場合がある）。
 
 ---
 
-## P1: Terraform構築（※完了済み・撮り直し前提）
+## P0〜P1: AWSで構築したパート（経緯として使う）
 
-Phase1は撮影前に完了しているため、**次回 apply 時に以下をまとめて撮る**（apply→destroyの通常運用の中で撮れる）。
+AWSラボは destroy 済み。記事では「最初はAWSでやろうとした」導入として使うので、**手元にある分で足りれば撮り直し不要**。
 
-| # | 撮るもの | 記事での使い道 | 状態 |
+| # | 素材 | 記事での使い道 | 状態 |
 |---|---|---|---|
-| P1-1 | 構成図（Internet→EC2(Docker)→Juice Shop＋Flow Logs/CloudTrail/CloudWatch） | 冒頭の全体像。draw.io等で作成 | ☐ |
-| P1-2 | `terraform plan` の末尾 `Plan: 23 to add, 0 to change, 0 to destroy.` | リソース数の提示 | ☐ |
-| P1-3 | `terraform apply` 完了と `Outputs:`（**app_url / account_id をマスク**） | 構築完了の証拠 | ☐ |
-| P1-4 | ブラウザで Juice Shop トップ画面（**URLバーのIPをマスク**） | ターゲットの紹介 | ☐ |
-| P1-5 | EC2 のセキュリティグループ inbound（80番が `/32` 2つだけ） | 「脆弱アプリを全公開しない」配慮の説明。**IPマスク** | ☐ |
-| P1-6 | CloudWatch Logs のロググループ一覧（`/artex-lab/juice-shop`、`/artex-lab/vpc-flow-logs`） | ログの置き場所紹介 | ☐ |
-| P1-7 | VPC → フローログ タブ（送信先 CloudWatch Logs / ALL） | Flow Logs 設定 | ☐ |
-| P1-8 | CloudTrail の証跡 `artex-lab-trail`（**S3バケット名にアカウントIDが入るのでマスク**） | CloudTrail 設定 | ☐ |
-| P1-9 | （経緯用）Fargate で `account blocked` になったエラー | 「Fargate→EC2に変えた理由」 | ☐ |
-| P1-10 | `terraform destroy` 完了（`Destroy complete! Resources: 23 destroyed.`） | コスト運用の締め | ☐ |
+| A-1 | 当初の構成図（Internet→EC2(Docker)→Juice Shop＋Flow Logs/CloudTrail/CloudWatch） | 「当初の計画」 | ☐（作図のみで可） |
+| A-2 | IAM: `artex-lab-builder` の許可タブ / `iam-limited` ポリシー | admin回避の工夫（短く） | ☐ |
+| A-3 | `terraform apply` 完了（`23 added`）、Juice Shop が HTTP 200 | 構築できたところ | ☐ |
+| A-4 | ハマりどころ: Fargate vCPU上限（account blocked）、instance-profile / PassRole 不足 | 体験談のスパイス | ☐（テキスト引用で可） |
+| A-5 | `terraform destroy` 完了 | 方針転換の区切り | ☐ |
 
-**撮り逃した場合の再現:**
-```powershell
-cd D:\study\aws-artex   # ec2-noalb の main.tf がある場所
-terraform plan  | Tee-Object captures\p1\p1-02-plan.txt
-terraform apply | Tee-Object captures\p1\p1-03-apply.txt
-terraform output
-# Juice Shop が 200 を返すまで2〜3分待つ（user_dataでDocker起動中）
-curl.exe -s -o NUL -w "%{http_code}`n" <app_url>
+**撮り逃した場合:** `terraform/ec2-noalb` を apply → 撮影 → destroy で、十数分・数円で撮り直せる。**このときARTEXは実行しない**（規約上の理由で方針転換したため）。A-4 のエラーはプロジェクトのメモから文面を引用すれば十分。
+
+---
+
+## P2: 方針転換（規約の壁）
+
+| # | 素材 | 記事での使い道 | 状態 |
+|---|---|---|---|
+| B-1 | ARTEX同梱の利用規約の該当箇所（ローカル隔離環境のみ想定／ネットワーク接続先へのスキャン禁止） | **記事の転換点**。原文を短く引用し、出典（ファイル名・リポジトリ）を明記 | ☐ |
+| B-2 | 「自己所有のAWS環境でもダメ」と判断した理由のメモ | 読者への注意喚起 | ☐ |
+| B-3 | AWS構成とローカル構成の比較表（自作） | 何を何で代替したか | ☐ |
+
+> B-1 は引用の範囲を最小限にし、要約＋該当箇所へのリンクにする。
+
+---
+
+## P3: ローカルのAWS風ログ環境の構築
+
+想定構成（`<<最終構成は動作確認後に確定>>`）:
+
+```text
+ARTEX (Docker Compose, UI localhost:8787)
+    │  対象URL: http://host.docker.internal:8080/
+    ▼
+nginx :8080  ── ALB Access Logs と同じ29フィールド形式で出力
+    │
+    ▼
+Juice Shop   ── stdout = アプリログ（CloudWatch Logs 相当）
+（＋ VPC Flow Logs 風: 5タプル＋action 形式で出力予定）
+（CloudTrail: ローカルに等価物なし → 記事で理由を説明）
 ```
-- P1-9（Fargateエラー）は環境を戻すコストが高いので **再現しない**。当時の会話・メモからエラー文面をテキストで引用し、Service Quotas の画面（申請中の状態）を代わりに載せる。
-- P1-10 は検証の最後に必ず撮れる。
+
+| # | 撮るもの | 記事での使い道 | 状態 |
+|---|---|---|---|
+| C-1 | ローカル構成図（上図を清書） | 新しい全体像 | ☐ |
+| C-2 | nginx の `log_format`（ALB形式29フィールドに合わせた定義） | 「ALBログを再現する」節のコード | ☐ |
+| C-3 | ALBの公式フィールド一覧と nginx 変数の対応表（自作。再現できない項目も明記） | どこまで本物に近いか | ☐ |
+| C-4 | Flow Logs風ログの出し方（`<<方式確定待ち>>`）と出力サンプル | Flow Logs の読み方の前振り | ☐ |
+| C-5 | `docker compose ps`（nginx / juice-shop / ARTEX / postgres が Up） | 起動確認 | ☐ |
+| C-6 | ブラウザで `http://localhost:8080/` の Juice Shop 画面 | 対象の紹介 | ☐ |
+| C-7 | 手動アクセス1回分の各ログ1行（ALB風 / アプリ / Flow風） | 「平常時はこう見える」のベースライン | ☐ |
+
+**撮り逃した場合:** すべてローカルなので `docker compose down` → `up -d` でいつでも撮り直せる。
 
 ---
 
-## P2: ARTEX実行（Docker Compose / UI `localhost:8787` / Haiku で2回）
+## P4: ARTEX実行（Haikuで2回）
 
-> Haiku で2回回す想定。**1回目＝UI・挙動を把握しながら撮影、2回目＝撮り逃し回収＋比較用**、と役割を分けると楽。
-> 各回の開始・終了時刻（秒まで）を `captures/README.txt` に記録すること。
+> 1回目＝UI・挙動を把握しながら撮影、2回目＝撮り逃し回収＋比較用。各回の開始・終了時刻を記録する。
+> **実行前にログファイルを空にするかローテート**しておくと、1回分のログだけを切り出せる。
 
 ### セットアップ
 | # | 撮るもの | 使い道 | 状態 |
 |---|---|---|---|
-| P2-1 | `docker compose up -d` → `docker compose ps`（artex / postgres が Up） | 起動手順 | ☐ |
-| P2-2 | `/setup` 画面（**トークン・パスワード欄が空の状態で**） | 初期設定 | ☐ |
-| P2-3 | LLM設定画面でモデル `claude-haiku-5-5` を選択（**APIキー欄は伏せる/未表示**） | コスト配慮の説明 | ☐ |
-| P2-4 | ターゲット登録画面（Juice Shop を登録。**URLのIPマスク**） | 対象スコープの明示 | ☐ |
+| D-1 | `/setup` 画面（**トークン・パスワード欄は空の状態**） | 初期設定 | ☐ |
+| D-2 | LLM設定でモデル `claude-haiku-5-5` を選んだ画面（**APIキー欄は伏せる**） | コスト配慮 | ☐ |
+| D-3 | ターゲット登録画面（`http://host.docker.internal:8080/`） | 対象がローカルであることの明示 | ☐ |
 
 ### 実行中（記事のメイン素材）
 | # | 撮るもの | 使い道 | 状態 |
 |---|---|---|---|
-| P2-5 | 探索開始直後の画面＋時刻 | タイムライン起点 | ☐ |
-| P2-6 | **Planner** が最初に立てた計画（何を優先したか） | 「AIはまず何を見るか」 | ☐ |
-| P2-7 | **Worker** の実行ログ（送ったリクエスト・判断） | 個々の行動 | ☐ |
-| P2-8 | **API探索**（`/api/`, `/rest/` 系を見つけた瞬間） | Juice Shop のAPIをどう発見したか | ☐ |
-| P2-9 | **Asset Graph** の変化（序盤・中盤・終盤の3枚） | 攻撃面が広がる様子 | ☐ |
-| P2-10 | **Exploration Graph** の変化（同上3枚） | 探索の分岐・深さ | ☐ |
-| P2-11 | 面白かった判断・失敗・同じ所をループした箇所 | 記事の「考察」パート | ☐ |
-| P2-12 | 終了時の結果 / レポート画面（発見した脆弱性一覧） | 成果 | ☐ |
-| P2-13 | ダッシュボードの **LLMトークン使用量** ＋ console.anthropic.com の Usage（**金額だけ写す**） | 実コスト（読者が一番知りたい所） | ☐ |
+| D-4 | 探索開始直後の画面＋時刻 | タイムラインの起点 | ☐ |
+| D-5 | **Planner** が最初に立てた計画 | 「AIはまず何を見るか」 | ☐ |
+| D-6 | **Worker** の実行ログ（送ったリクエスト・判断） | 個々の行動 | ☐ |
+| D-7 | **API探索**（`/api/`, `/rest/` を見つけた瞬間） | APIの発見のしかた | ☐ |
+| D-8 | **Asset Graph** の変化（序盤・中盤・終盤の3枚） | 攻撃面が広がる様子 | ☐ |
+| D-9 | **Exploration Graph** の変化（同上） | 探索の分岐・深さ | ☐ |
+| D-10 | 面白かった判断・失敗・ループした箇所 | 考察パート | ☐ |
+| D-11 | 結果 / レポート画面 | 成果 | ☐ |
+| D-12 | LLMトークン使用量 ＋ console.anthropic.com の Usage（金額だけ） | 実コスト | ☐ |
 
-### あると便利
-- 画面録画（Win+Alt+R / Xbox Game Bar）で丸ごと録っておくと、グラフの変化を後から好きなタイミングで切り出せる。**GIF化してZennに載せるとグラフの変化が伝わりやすい。**
-- `docker compose logs artex > captures\p2\artex-run1.log`（**`[auth]` 行と APIキーを含む行を削除してから**保管）。
+- 画面録画（Win+Alt+R）で丸ごと録っておき、グラフの変化をGIFで切り出すと伝わりやすい。
+- `docker compose logs artex > captures\p4\artex-run1.log`（`[auth]` 行は削除）。
 
-**撮り逃した場合の再現:**
-- P2-1〜P2-4 は何度でも撮れる（`docker compose down` / `up -d`）。
-- P2-5〜P2-13 は探索結果が毎回変わる。**2回目の実行で回収**し、記事では「n回目の実行」と明記。グラフの序盤〜終盤を撮り逃したら、ARTEX UI に過去実行の履歴が残るか確認（残れば最終状態だけは撮れる）。
-- ⚠ 再実行時は Juice Shop の EC2 が起動中か、自宅IPが変わっていないか（SG）を先に確認。
+**撮り逃した場合:** 探索結果は毎回変わるので、2回目で回収して記事に「n回目の実行」と書く。Haiku なので追加コストは小さい。
 
 ---
 
-## P3: AWSログ確認（CloudWatch / VPC Flow Logs / CloudTrail）
+## P5: ログで攻撃を可視化する（記事の後半メイン）
 
-> P2 で記録した **ARTEX実行の時間窓** で各ログを開く。Logs Insights のクエリは `docs/phase3-log-analysis.md` を使い回す。
-> ログは保持期間 14日（Flow Logs / アプリログ）。**destroy するとロググループごと消える** ので、destroy 前に必ずエクスポート。
+**各回の実行が終わったらすぐに、ログファイルを `captures\p5\runN\` にコピー**する（コンテナを作り直すと消える構成の場合があるため）。
 
-| # | 撮るもの | 使い道 | 状態 |
+| # | 撮る/作るもの | 使い道 | 状態 |
 |---|---|---|---|
-| P3-1 | `/artex-lab/juice-shop` の Logs Insights 結果（攻撃ペイロード `select`/`union`/`<script`/`../` で絞込） | アプリ側で攻撃がどう見えるか | ☐ |
-| P3-2 | 同じロググループの時系列件数（`stats count(*) by bin(1m)`）のグラフ | 「探索開始でアクセスが跳ねる」図 | ☐ |
-| P3-3 | `/artex-lab/vpc-flow-logs` の Logs Insights（`srcaddr` 別・`dstport` 別集計） | 通信量・送信元の特定（**自IPマスク**） | ☐ |
-| P3-4 | Flow Logs の REJECT 集計（80番以外への到達試行があったか） | SGで弾かれた通信の見え方 | ☐ |
-| P3-5 | Flow Logs の生ログ1〜2行と各フィールドの注釈 | 読み方の解説 | ☐ |
-| P3-6 | CloudTrail イベント履歴（ARTEX実行時間帯） | **Web攻撃は CloudTrail に出ない** ことの実証（ここ大事） | ☐ |
-| P3-7 | CloudTrail で terraform apply/destroy の操作（`RunInstances` 等）が見える画面 | CloudTrail に何が出るかの対比（**アカウントID・アクセスキーIDマスク**） | ☐ |
-| P3-8 | 「送信元IPで串刺し」した結果のまとめ表（自作） | 初動調査の流れの説明 | ☐ |
-| P3-9 | 「どのログにも残らなかった行動」のメモ | 監視設計の改善点（記事3本目の種） | ☐ |
+| E-1 | ALB風アクセスログの生ログ数行＋フィールド注釈 | ALBログの読み方 | ☐ |
+| E-2 | 時間あたりリクエスト数（1分単位）のグラフ | 「探索開始で跳ねる」図 | ☐ |
+| E-3 | ステータスコード比率（2xx / 4xx / 5xx）とパス上位 | 探索の典型パターン（404の量産など） | ☐ |
+| E-4 | User-Agent 一覧 | ツールの痕跡が残るか | ☐ |
+| E-5 | アプリログで攻撃ペイロードを grep した結果（`select` / `union` / `<script` / `../`） | アプリ側からの見え方 | ☐ |
+| E-6 | 「成功してしまった」リクエスト（攻撃っぽいのに 200 / 302） | 成否の判定 | ☐ |
+| E-7 | Flow Logs風ログの集計（送信元・宛先ポート・ACCEPT/REJECT） | 通信レベルの見え方 | ☐ |
+| E-8 | ARTEXの行動（D-5〜D-7）とログの時刻の対応表 | **AIの判断がログにどう現れたか**（記事の山場） | ☐ |
+| E-9 | 「CloudTrailにはそもそも出ない」ことの説明図（データプレーンとコントロールプレーンの違い） | 実AWSとの差分 | ☐ |
+| E-10 | 「どのログにも残らなかった行動」のメモ | 監視設計の改善点 | ☐ |
 
-**エクスポート（destroy前に実行）:**
-```powershell
-# 例: ARTEX実行時間帯のアプリログを保存（時刻はミリ秒UNIX時間）
-aws logs filter-log-events --profile artex-lab --region ap-northeast-1 `
-  --log-group-name /artex-lab/juice-shop --start-time <開始ms> --end-time <終了ms> `
-  --output json > captures\p3\juice-shop-run1.json
-aws logs filter-log-events --profile artex-lab --region ap-northeast-1 `
-  --log-group-name /artex-lab/vpc-flow-logs --start-time <開始ms> --end-time <終了ms> `
-  --output json > captures\p3\flowlogs-run1.json
+集計例（PowerShellの代わりに WSL / Git Bash でも可。ALB形式のフィールド番号は確定した `log_format` に合わせる）:
+```bash
+# ステータスコード比率（ALB形式: 9番目が elb_status_code）
+awk '{print $9}' access.log | sort | uniq -c | sort -rn
+# 1分ごとのリクエスト数（2番目が time。ISO8601 の分まで切り出し）
+awk '{print substr($2,1,16)}' access.log | sort | uniq -c
+# パス上位（13番目以降が "METHOD URL PROTO"）
+awk -F'"' '{print $2}' access.log | awk '{print $2}' | sed 's/?.*//' | sort | uniq -c | sort -rn | head -20
 ```
-- Logs Insights の結果画面は右上「エクスポート」→ CSV / Markdown でも保存可（Markdownはそのまま記事に貼れる）。
+> 余力があれば、ALB形式のログを Athena の ALB テーブル定義でそのまま読めるか試すと「本物と同じ形式にした意味」が示せる（S3に置くだけなのでコストはほぼゼロ）。
 
-**撮り逃した場合の再現:** destroy 前ならコンソールで何度でも撮れる。destroy 後はエクスポートしたJSONから表を作るか、P2をもう1回（Haiku）流してログを再生成する。
+**撮り逃した場合:** 保存したログファイルがあれば集計・グラフは何度でも作り直せる。ログを失ったら Haiku でもう1回回す。
 
 ---
 
-## P4: WAF前後比較
+## 今回の対象外（記事で理由だけ書く）
 
-> WAF(Web ACL) は EC2 に直接付けられないため、**ALBあり構成（`terraform/ec2-alb/`）に立て直してから** 実施。ALB Access Logs もここで初めて取れる。
-
-| # | 撮るもの | 使い道 | 状態 |
-|---|---|---|---|
-| P4-1 | ALBあり構成の構成図（WAF付き） | 構成の差分 | ☐ |
-| P4-2 | **WAF無し**で ARTEX 実行（ALB構成）→ ALB Access Logs の 4xx/2xx 比率 | 比較のベースライン | ☐ |
-| P4-3 | Web ACL の設定画面（AWS マネージドルール: Core rule set / SQLi / Known bad inputs 等） | どのルールを入れたか | ☐ |
-| P4-4 | **WAF有り**で ARTEX 実行 → WAF のサンプルリクエスト画面（BLOCK されたもの） | 検知・ブロックの実例 | ☐ |
-| P4-5 | WAF ログ（`terminatingRuleId`, `action`）の Logs Insights 集計 | どのルールが効いたか | ☐ |
-| P4-6 | ARTEX 側の挙動差（ブロックされて探索が止まった/迂回しようとした） | AIペンテスターの反応 | ☐ |
-| P4-7 | 前後比較表（リクエスト数・発見数・ブロック数・トークン消費） | 記事のまとめ | ☐ |
-
-**撮り逃した場合の再現:** WAF は Web ACL の関連付けを外す/付けるだけで前後を切り替えられる。ARTEX をもう1回回せば再取得可能（コスト: Haiku で数十円程度）。
+- 実AWSの CloudWatch Logs / VPC Flow Logs / CloudTrail のスクリーンショット（ARTEXをAWS上の対象に向けないため）
+- AWS WAF の前後比較（旧P4）。やるなら次回以降に、ローカルで ModSecurity などの WAF を nginx に入れて比較する案がある。
 
 ---
 
 ## 公開前の最終チェック
 
-- [ ] 全画像を見直し、アカウントID・自IP・EC2 IP・APIキー・アクセスキーIDが写っていない
-- [ ] テキストログを grep（アカウントID / 自IP / `AKIA` / `sk-ant`）してヒット0
-- [ ] ARTEXの対象が「自分の所有環境（Juice Shop）だけ」であることを記事内に明記
-- [ ] 検証後に `terraform destroy` 済み（記事公開時点でエンドポイントが生きていない）
-- [ ] APIキーを使い終わったら無効化 or Spend limit を下げた
+- [ ] 全画像にAPIキー・トークン・パスワード・PC名が写っていない
+- [ ] AWSパートの画像にアカウントID・自宅グローバルIP・EC2のIPが写っていない
+- [ ] テキストログを grep（`sk-ant` / `AKIA` / アカウントID / 自宅グローバルIP）してヒット0
+- [ ] ARTEXの対象がローカルの Juice Shop だけであること、規約に沿って方針を変えたことを記事内に明記
+- [ ] APIキーを使い終わったら無効化するか、Spend limit を下げた
