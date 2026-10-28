@@ -1,9 +1,9 @@
 # Zenn記事用 撮影・ログ取得チェックリスト（ローカル検証版）
 
 > 記事の筋書き: AWSに検証環境を構築 → ARTEXの利用規約上、ネットワーク越しの対象（自己所有でも）は使えないと判明して方針転換 → **ローカルにAWS風ログ環境を作り直し、攻撃がログにどう見えるかを学ぶ**。
-> 記事構成案は [`zenn-article-outline.md`](zenn-article-outline.md)。最終更新: 2026-10-27（方針変更を反映）
+> 記事構成案は [`zenn-article-outline.md`](zenn-article-outline.md)。最終更新: 2026-10-28（Run1/Run2の結果と最終構成を反映）
 >
-> ⚠ ローカル構成（ポート・コンテナ名・Flow Logs風ログの形式）は動作確認後に確定する。`<<確定待ち>>` の箇所は確定後に更新すること。
+> ✅ = 撮影済み（スレッドにアップロード済み）。
 
 ---
 
@@ -16,7 +16,7 @@
 
 ### 時刻をそろえる
 - ARTEX実行の **開始・終了時刻を秒まで** 控える（PowerShell: `Get-Date -Format o`）。
-- nginx（ALB風ログ）・Juice Shop・Flow Logs風ログ・ARTEX の **タイムゾーンをそろえる**（コンテナは既定UTC。記事内で「UTC表記」と明記するのが楽）。
+- nginx（ALB風ログ）・Juice Shop・ARTEX の **タイムゾーンをそろえる**（コンテナは既定UTC。記事内で「UTC表記」と明記するのが楽）。
 
 ### マスキング（公開前に必ず）
 
@@ -66,104 +66,122 @@ AWSラボは destroy 済み。記事では「最初はAWSでやろうとした�
 
 ---
 
-## P3: ローカルのAWS風ログ環境の構築
+## P3: ローカルのAWS風ログ環境の構築（構成確定）
 
-想定構成（`<<最終構成は動作確認後に確定>>`）:
+最終構成（2026-10-28確定）:
 
 ```text
 ARTEX (Docker Compose, UI localhost:8787)
     │  対象URL: http://host.docker.internal:8080/
     ▼
-nginx :8080  ── ALB Access Logs と同じ29フィールド形式で出力
+nginx 127.0.0.1:8080 ── ALB Access Logs と同じ形式 → local-lab/logs/alb_access.log
     │
     ▼
-Juice Shop   ── stdout = アプリログ（CloudWatch Logs 相当）
-（＋ VPC Flow Logs 風: 5タプル＋action 形式で出力予定）
-（CloudTrail: ローカルに等価物なし → 記事で理由を説明）
+OWASP Juice Shop（内部 3000）── stdout = アプリログ（CloudWatch Logs 相当）
 ```
+
+ログは **ALB風アクセスログ** と **アプリログ** の2系統。VPC Flow Logs風ログは実装せず（haiku/sonnet比較を優先）、CloudTrail相当はローカルに無い。
 
 | # | 撮るもの | 記事での使い道 | 状態 |
 |---|---|---|---|
 | C-1 | ローカル構成図（上図を清書） | 新しい全体像 | ☐ |
-| C-2 | nginx の `log_format`（ALB形式29フィールドに合わせた定義） | 「ALBログを再現する」節のコード | ☐ |
-| C-3 | ALBの公式フィールド一覧と nginx 変数の対応表（自作。再現できない項目も明記） | どこまで本物に近いか | ☐ |
-| C-4 | Flow Logs風ログの出し方（`<<方式確定待ち>>`）と出力サンプル | Flow Logs の読み方の前振り | ☐ |
-| C-5 | `docker compose ps`（nginx / juice-shop / ARTEX / postgres が Up） | 起動確認 | ☐ |
+| C-2 | nginx の `log_format`（ALB形式に合わせた定義） | 「ALBログを再現する」節のコード | ☐ |
+| C-3 | ALBの公式フィールドと nginx 変数の対応表（自作。再現できない項目も明記） | どこまで本物に近いか | ☐ |
+| ~~C-4~~ | ~~Flow Logs風ログ~~ | **欠番**（未実装。記事では「今回は見送り」と一言） | — |
+| C-5 | `docker compose ps`（nginx / juice-shop / artex / postgres が Up） | 起動確認 | ☐ |
 | C-6 | ブラウザで `http://localhost:8080/` の Juice Shop 画面 | 対象の紹介 | ☐ |
-| C-7 | 手動アクセス1回分の各ログ1行（ALB風 / アプリ / Flow風） | 「平常時はこう見える」のベースライン | ☐ |
+| C-7 | 手動アクセス1回分の `alb_access.log` 1行とアプリログ | 平常時のベースライン | ☐ |
 
-**撮り逃した場合:** すべてローカルなので `docker compose down` → `up -d` でいつでも撮り直せる。
+**撮り逃した場合:** ローカルなので `docker compose down` → `up -d` でいつでも撮り直せる。
 
 ---
 
-## P4: ARTEX実行（Haikuで2回）
+## P4: ARTEX実行（Run1 = haiku 完走 / Run2 = sonnet 不成立）
 
-> 1回目＝UI・挙動を把握しながら撮影、2回目＝撮り逃し回収＋比較用。各回の開始・終了時刻を記録する。
-> **実行前にログファイルを空にするかローテート**しておくと、1回分のログだけを切り出せる。
+| Run | モデル | 結果 |
+|---|---|---|
+| Run1 | `claude-haiku-5-5`（workers 2） | **完走**。2026-10-28 14:35:06〜14:41:41 UTC（約6分35秒）、634リクエスト、Juice Shop 116中18攻略（最大4★）、実課金 約$0.46 |
+| Run2 | `claude-sonnet-5-5` | **不成立**。thinking / budget の設定がかみ合わず空応答のまま進まず、打ち切り |
+
+> 分析は `phase2-coverage.md`、Run2の経緯は `phase2-run-log.md` を参照。
+> ⚠ 実行時間は、ログ上の値（6分35秒）とARTEXのタスク一覧の Duration（6m50s）がずれている。記事ではどちらの値か明記する。
 
 ### セットアップ
 | # | 撮るもの | 使い道 | 状態 |
 |---|---|---|---|
 | D-1 | `/setup` 画面（**トークン・パスワード欄は空の状態**） | 初期設定 | ☐ |
-| D-2 | LLM設定でモデル `claude-haiku-5-5` を選んだ画面（**APIキー欄は伏せる**） | コスト配慮 | ☐ |
-| D-3 | ターゲット登録画面（`http://host.docker.internal:8080/`） | 対象がローカルであることの明示 | ☐ |
+| D-2 | LLM設定のプロファイル（haiku / sonnet。**APIキー欄は伏せる**） | モデル選択 | ☐ |
+| D-3 | New task 画面（Description に対象 `http://host.docker.internal:8080/`、Goal「このWebアプリを探索し、脆弱性を洗い出す」） | 対象がローカルであることの明示 | ✅ 撮影済み（sonnet-2 の作成画面） |
 
-### 実行中（記事のメイン素材）
+### Run1（haiku）
 | # | 撮るもの | 使い道 | 状態 |
 |---|---|---|---|
-| D-4 | 探索開始直後の画面＋時刻 | タイムラインの起点 | ☐ |
+| D-4 | 実行中のタスク一覧（Running・workers 2・トークン増加中） | タイムラインの起点 | ✅ 撮影済み |
 | D-5 | **Planner** が最初に立てた計画 | 「AIはまず何を見るか」 | ☐ |
-| D-6 | **Worker** の実行ログ（送ったリクエスト・判断） | 個々の行動 | ☐ |
-| D-7 | **API探索**（`/api/`, `/rest/` を見つけた瞬間） | APIの発見のしかた | ☐ |
-| D-8 | **Asset Graph** の変化（序盤・中盤・終盤の3枚） | 攻撃面が広がる様子 | ☐ |
-| D-9 | **Exploration Graph** の変化（同上） | 探索の分岐・深さ | ☐ |
-| D-10 | 面白かった判断・失敗・ループした箇所 | 考察パート | ☐ |
-| D-11 | 結果 / レポート画面 | 成果 | ☐ |
-| D-12 | LLMトークン使用量 ＋ console.anthropic.com の Usage（金額だけ） | 実コスト | ☐ |
+| D-6 | **Worker** の実行ログ・Tool runs（送ったリクエスト・判断） | 個々の行動 | ☐ |
+| D-7 | SQLi（`UNION SELECT NULL...` の列数探り）を試している Worker の画面 | アクセスログ（E-3）との対応 | ☐ |
+| D-8 | **Assets** / グラフの最終状態 | 攻撃面の広がり | ☐ |
+| D-9 | **Findings** 一覧（3/7/8/3） | 成果 | ☐ |
+| D-10 | タスク詳細の Done 画面（Duration・トークン In 3.3M / Out 125k） | 実行規模 | ☐ |
+| D-11 | console.anthropic.com の Usage（金額 約$0.46 だけ写す） | 実コスト | ☐ |
 
-- 画面録画（Win+Alt+R）で丸ごと録っておき、グラフの変化をGIFで切り出すと伝わりやすい。
-- `docker compose logs artex > captures\p4\artex-run1.log`（`[auth]` 行は削除）。
+### Run2（sonnet、不成立）※体験談パートの素材
+| # | 撮るもの | 使い道 | 状態 |
+|---|---|---|---|
+| D-12 | タスク一覧（haiku = Done / sonnet-2, sonnet-3 = Paused・トークン Out 0） | 「sonnetは載せられなかった」の証拠 | ✅ 撮影済み |
+| D-13 | 空応答のまま進まない画面（LLM records / Logs で応答が空） | 何が起きたか | ☐ |
+| D-14 | budget 関連の 400 エラー画面（エラーメッセージ全文が読めるもの） | 原因の説明 | ☐ |
+| D-15 | 試した設定変更（thinking / max_tokens / budget）のメモ・画面 | 試行錯誤の記録 | ☐ |
 
-**撮り逃した場合:** 探索結果は毎回変わるので、2回目で回収して記事に「n回目の実行」と書く。Haiku なので追加コストは小さい。
+**撮り逃した場合:**
+- D-5〜D-10 は ARTEX の UI に Run1 のタスクが残っていれば後から開いて撮れる。**タスクを削除・アーカイブする前に回収**する。
+- D-13〜D-14 は、sonnet のタスクを再開すれば同じエラーが再現するはず（トークンはほぼ消費しない）。
+- Run1 の結果をもう一度欲しい場合は haiku で再実行（$0.5 程度）。ただし結果は毎回変わるので「n回目」と明記する。
 
 ---
 
 ## P5: ログで攻撃を可視化する（記事の後半メイン）
 
-**各回の実行が終わったらすぐに、ログファイルを `captures\p5\runN\` にコピー**する（コンテナを作り直すと消える構成の場合があるため）。
+ログ実体: `local-lab/logs/alb_access.log`（ALB風）と Juice Shop の stdout（`docker compose logs juice-shop`）。
+**Run1 の時間窓（14:35:06〜14:41:41 UTC）で切り出して `captures\p5\run1\` に保存**しておく。
 
 | # | 撮る/作るもの | 使い道 | 状態 |
 |---|---|---|---|
-| E-1 | ALB風アクセスログの生ログ数行＋フィールド注釈 | ALBログの読み方 | ☐ |
-| E-2 | 時間あたりリクエスト数（1分単位）のグラフ | 「探索開始で跳ねる」図 | ☐ |
-| E-3 | ステータスコード比率（2xx / 4xx / 5xx）とパス上位 | 探索の典型パターン（404の量産など） | ☐ |
-| E-4 | User-Agent 一覧 | ツールの痕跡が残るか | ☐ |
-| E-5 | アプリログで攻撃ペイロードを grep した結果（`select` / `union` / `<script` / `../`） | アプリ側からの見え方 | ☐ |
-| E-6 | 「成功してしまった」リクエスト（攻撃っぽいのに 200 / 302） | 成否の判定 | ☐ |
-| E-7 | Flow Logs風ログの集計（送信元・宛先ポート・ACCEPT/REJECT） | 通信レベルの見え方 | ☐ |
-| E-8 | ARTEXの行動（D-5〜D-7）とログの時刻の対応表 | **AIの判断がログにどう現れたか**（記事の山場） | ☐ |
-| E-9 | 「CloudTrailにはそもそも出ない」ことの説明図（データプレーンとコントロールプレーンの違い） | 実AWSとの差分 | ☐ |
-| E-10 | 「どのログにも残らなかった行動」のメモ | 監視設計の改善点 | ☐ |
+| E-1 | `alb_access.log` の生ログ数行＋フィールド注釈 | ALBログの読み方 | ☐ |
+| E-2 | ステータスコード分布（200×350, 500×86, 401×81, 302×41 …）と1分ごとのリクエスト数 | 探索の典型パターン | ☐ |
+| E-3 | **SQLi の痕跡**: `UNION SELECT NULL,...` が列数を1つずつ増やして並ぶ行 → `FROM Users` → `FROM sqlite_master` | 記事の山場の画像 | ☐ |
+| E-4 | User-Agent（`curl/7.88.1`、一部 `Python-urllib/3.12`）とよく叩かれたパス上位 | ツールの痕跡 | ☐ |
+| E-5 | アプリログの `Solved N-star ...` 行（例: Poison Null Byte, NoSQL Manipulation） | 攻撃の成立がアプリ側でどう見えるか | ☐ |
+| E-6 | アプリログの **cheat 検知** `Cheat score ... solved in 0min (expected ~8min) ... 0.99` | アプリ自身が自動化を見抜く例 | ☐ |
+| E-7 | アプリログの `Error: Unexpected path ...`（存在しない経路への探索） | 探索の痕跡 | ☐ |
+| E-8 | `/api/Challenges` の solved 集計（18/116、難易度別・カテゴリ別） | 正解データとの突合 | ☐ |
+| E-9 | 3層の突合表（アクセスログ＝試したこと / アプリログ＝成立したこと / Challenges＝確定結果） | 学びのまとめ | ☐ |
+| ~~E-10~~ | ~~Flow Logs風ログの集計~~ | **欠番**（未実装） | — |
+| E-11 | 「CloudTrailには出ない」ことの説明図（コントロールプレーンとデータプレーンの違い） | 実AWSとの差分 | ☐（作図のみ） |
+| E-12 | 「どのログにも残らなかった行動」のメモ | 監視設計の改善点 | ☐ |
 
-集計例（PowerShellの代わりに WSL / Git Bash でも可。ALB形式のフィールド番号は確定した `log_format` に合わせる）:
+集計例（WSL / Git Bash。ALB形式のフィールド番号は `log_format` に合わせて調整）:
 ```bash
-# ステータスコード比率（ALB形式: 9番目が elb_status_code）
-awk '{print $9}' access.log | sort | uniq -c | sort -rn
-# 1分ごとのリクエスト数（2番目が time。ISO8601 の分まで切り出し）
-awk '{print substr($2,1,16)}' access.log | sort | uniq -c
-# パス上位（13番目以降が "METHOD URL PROTO"）
-awk -F'"' '{print $2}' access.log | awk '{print $2}' | sed 's/?.*//' | sort | uniq -c | sort -rn | head -20
+# ステータスコード分布（ALB形式: 9番目が elb_status_code）
+awk '{print $9}' alb_access.log | sort | uniq -c | sort -rn
+# 1分ごとのリクエスト数（2番目が time）
+awk '{print substr($2,1,16)}' alb_access.log | sort | uniq -c
+# SQLiの痕跡だけを時系列で抜く
+grep -i 'union' alb_access.log | awk -F'"' '{print $2}'
+# アプリログの成功と cheat 検知
+docker compose logs juice-shop | grep -E 'Solved|Cheat score'
 ```
-> 余力があれば、ALB形式のログを Athena の ALB テーブル定義でそのまま読めるか試すと「本物と同じ形式にした意味」が示せる（S3に置くだけなのでコストはほぼゼロ）。
 
-**撮り逃した場合:** 保存したログファイルがあれば集計・グラフは何度でも作り直せる。ログを失ったら Haiku でもう1回回す。
+**撮り逃した場合:** 保存したログファイルがあれば集計・画像は何度でも作り直せる。ログを失った場合は haiku でもう1回実行する。
 
 ---
 
 ## 今回の対象外（記事で理由だけ書く）
 
-- 実AWSの CloudWatch Logs / VPC Flow Logs / CloudTrail のスクリーンショット（ARTEXをAWS上の対象に向けないため）
-- AWS WAF の前後比較（旧P4）。やるなら次回以降に、ローカルで ModSecurity などの WAF を nginx に入れて比較する案がある。
+- 実AWSの CloudWatch Logs / VPC Flow Logs / CloudTrail のスクリーンショット（ARTEXをAWS上の対象に向けなかったため）
+- VPC Flow Logs風ログ（未実装。比較を優先したため）
+- sonnet での探索結果（Run2 不成立）
+- WAF の前後比較（旧P4）。次にやるなら nginx に ModSecurity を入れて比較する案がある
 
 ---
 
@@ -172,5 +190,6 @@ awk -F'"' '{print $2}' access.log | awk '{print $2}' | sed 's/?.*//' | sort | un
 - [ ] 全画像にAPIキー・トークン・パスワード・PC名が写っていない
 - [ ] AWSパートの画像にアカウントID・自宅グローバルIP・EC2のIPが写っていない
 - [ ] テキストログを grep（`sk-ant` / `AKIA` / アカウントID / 自宅グローバルIP）してヒット0
+- [ ] sonnet が不成立だったことを、失敗として正直に書いた
 - [ ] ARTEXの対象がローカルの Juice Shop だけであること、規約に沿って方針を変えたことを記事内に明記
 - [ ] APIキーを使い終わったら無効化するか、Spend limit を下げた
